@@ -1,48 +1,43 @@
-FROM p3ps1man/dockertrader:latest
+FROM debian:12
 
-# ESSIEM SYSTEMS - MetaTrader 4 VNC Server
+# ESSIEM SYSTEMS - MetaTrader 4 Headless Server
 LABEL maintainer="ESSIEM SYSTEMS"
 LABEL version="1.0"
-LABEL description="ESSIEM MetaTrader 4 VNC Server with Auto-Restart"
+LABEL description="ESSIEM MetaTrader 4 Headless Server with VNC"
 
-ENV VNC_PORT=5901 \
-    RESOLUTION=1920x1080 \
-    WEB_PORT=3000 \
-    SUPERVISORD_PIDFILE=/home/mt4/.supervisor/supervisord.pid \
-    SUPERVISORD_LOGFILE=/home/mt4/.supervisor/supervisord.log \
-    CERT=/home/mt4/ssl/cert.pem \
-    KEY=/home/mt4/ssl/key.pem \
-    VNC_PASSWORD=changeme \
-    MT4_RESOLUTION=1600x800
+ENV DEBIAN_FRONTEND=noninteractive
 
-USER root
+# Install dependencies
+RUN apt update && apt upgrade -y && \
+    apt install -y sudo curl wget x11vnc xvfb supervisor git openssl
 
-# Create mt4 user (since p3ps1man only has mt5 user)
-RUN useradd -m -s /bin/bash mt4 && \
-    echo 'mt4 ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+# Install Wine using same method as mt4debian.sh
+RUN rm -f /etc/apt/sources.list.d/winehq* && \
+    dpkg --add-architecture i386 && \
+    mkdir -pm755 /etc/apt/keyrings && \
+    wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key && \
+    wget -nc https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources && \
+    mv winehq-bookworm.sources /etc/apt/sources.list.d/ && \
+    apt update && \
+    apt install -y --install-recommends winehq-stable
 
-RUN pacman -Sy --noconfirm \
-    x11vnc \
-    supervisor \
-    git \
-    openssl \
-    wget
+# Create mt4 user
+RUN useradd -m -s /bin/bash mt4
 
-RUN git clone https://github.com/novnc/noVNC.git /usr/share/novnc && \
-    git clone https://github.com/novnc/websockify.git /usr/share/novnc/utils/websockify
+# Download MT4
+RUN wget "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt4/mt4oldsetup.exe" -O /tmp/mt4setup.exe
 
-USER mt4
-WORKDIR /home/mt4
+# Set up noVNC
+RUN git clone https://github.com/novnc/noVNC.git /opt/novnc && \
+    git clone https://github.com/novnc/websockify.git /opt/novnc/utils/websockify
 
-RUN mkdir .supervisor && mkdir ssl
-RUN openssl req -x509 -newkey rsa:4096 -keyout ssl/key.pem -out ssl/cert.pem -days 36500 -nodes -subj "/C=US/ST=ESSIEM/L=Trading/O=ESSIEM SYSTEMS/CN=essiem-mt4"
+# Generate SSL
+RUN mkdir -p /opt/essiem-mt4/ssl && \
+    openssl req -x509 -newkey rsa:4096 -keyout /opt/essiem-mt4/ssl/key.pem -out /opt/essiem-mt4/ssl/cert.pem -days 36500 -nodes -subj "/C=US/ST=ESSIEM/L=Trading/O=ESSIEM SYSTEMS/CN=essiem-mt4"
 
-# INSTALL MT4 (this is the only difference from MT5)
-RUN wget -O /home/mt4/mt4-setup.exe "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt4/mt4setup.exe" && \
-    wine mt4-setup.exe /S && \
-    sleep 30 && \
-    rm -f /home/mt4/mt4-setup.exe
+# Copy supervisor config
+COPY supervisord.conf /etc/essiem-mt4/supervisord.conf
 
-COPY supervisord.conf .supervisor/supervisord.conf
+EXPOSE 6080
 
-CMD ["/usr/bin/supervisord", "-c", ".supervisor/supervisord.conf"]
+CMD ["/usr/bin/supervisord", "-c", "/etc/essiem-mt4/supervisord.conf"]
