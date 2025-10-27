@@ -1,4 +1,4 @@
-FROM p3ps1man/dockertrader:latest
+FROM debian:12
 
 # ESSIEM SYSTEMS - MetaTrader 4 VNC Server
 LABEL maintainer="ESSIEM SYSTEMS"
@@ -13,20 +13,33 @@ ENV VNC_PORT=5901 \
     CERT=/home/mt4/ssl/cert.pem \
     KEY=/home/mt4/ssl/key.pem \
     VNC_PASSWORD=changeme \
-    MT4_RESOLUTION=1600x800
+    MT4_RESOLUTION=1600x800 \
+    DEBIAN_FRONTEND=noninteractive
 
 USER root
 
-# Create mt4 user
-RUN useradd -m -s /bin/bash mt4 && \
-    echo 'mt4 ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
-
-RUN pacman -Sy --noconfirm \
+# Install dependencies
+RUN apt update && apt upgrade -y && \
+    apt install -y \
     x11vnc \
     supervisor \
     git \
     openssl \
-    wget
+    wget \
+    xvfb \
+    x11-utils \
+    sudo \
+    python3
+
+# Install MT4 using the working Debian installer
+RUN wget https://download.mql5.com/cdn/web/metaquotes.software.corp/mt4/mt4debian.sh && \
+    chmod +x mt4debian.sh && \
+    ./mt4debian.sh && \
+    rm -f mt4debian.sh
+
+# Create mt4 user
+RUN useradd -m -s /bin/bash mt4 && \
+    echo 'mt4 ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 RUN git clone https://github.com/novnc/noVNC.git /usr/share/novnc && \
     git clone https://github.com/novnc/websockify.git /usr/share/novnc/utils/websockify
@@ -36,15 +49,6 @@ WORKDIR /home/mt4
 
 RUN mkdir .supervisor && mkdir ssl
 RUN openssl req -x509 -newkey rsa:4096 -keyout ssl/key.pem -out ssl/cert.pem -days 36500 -nodes -subj "/C=US/ST=ESSIEM/L=Trading/O=ESSIEM SYSTEMS/CN=essiem-mt4"
-
-# DOWNLOAD AND INSTALL MT4 PROPERLY
-RUN wget -O /home/mt4/mt4-setup.exe "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt4/mt4setup.exe" && \
-    WINEPREFIX=/home/mt4/program wineboot -u --init && \
-    sleep 10 && \
-    WINEPREFIX=/home/mt4/program wine mt4-setup.exe /S && \
-    sleep 60 && \
-    pkill -f wine || true && \
-    rm -f /home/mt4/mt4-setup.exe
 
 COPY supervisord.conf .supervisor/supervisord.conf
 
